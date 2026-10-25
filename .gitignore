@@ -1,0 +1,16 @@
+build/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+DerivedData/
+
+# Local signing settings, credentials, and device diagnostics
+*.mobileprovision
+*.p12
+*.p8
+*.xcarchive/
+*.ipa
+.env
+.env.*
+*.local.xcconfig
+badge-transfer.log
