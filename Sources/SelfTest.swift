@@ -119,6 +119,35 @@
         guard video.ext == "avi", video.frames.count >= 9, video.data.prefix(4) == Data("RIFF".utf8)
         else { throw BadgeError("Video conversion failed") }
         for frame in video.frames { try validateJPEG(frame) }
+        for effect in TextEffect.allCases {
+          var draft = AnimationDraft()
+          draft.effect = effect
+          draft.text = "Hi 👋"
+          draft.duration = 1
+          draft.background = image
+          let made = try AnimationMaker.prepare(draft, quality: .compact)
+          guard made.frames.count == 10, made.duration == 1,
+            Set(made.frames).count > 1
+          else { throw BadgeError("Animation did not move: \(effect)") }
+          for frame in made.frames { try validateJPEG(frame) }
+          let exported = try GIFExporter.export(made)
+          defer { try? FileManager.default.removeItem(at: exported) }
+          guard let source = CGImageSourceCreateWithURL(exported as CFURL, nil),
+            CGImageSourceGetCount(source) == 10,
+            let first = CGImageSourceCreateImageAtIndex(source, 0, nil),
+            first.width == 368, first.height == 368
+          else { throw BadgeError("GIF export frames or dimensions failed") }
+          let properties = CGImageSourceCopyProperties(source, nil) as? [CFString: Any]
+          let loop = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+          guard loop?[kCGImagePropertyGIFLoopCount] as? Int == 0 else {
+            throw BadgeError("GIF must loop forever")
+          }
+          let roundTrip = try await MediaConverter.prepare(
+            url: exported, fit: .fill, quality: .compact)
+          guard roundTrip.frames.count == 10, roundTrip.duration == 1 else {
+            throw BadgeError("GIF export timing failed")
+          }
+        }
         var truncated = Data("not media".utf8)
         let invalid = dir.appendingPathComponent("invalid.gif")
         try truncated.write(to: invalid)
@@ -129,7 +158,7 @@
         } catch { rejected = true }
         guard rejected else { throw BadgeError("Invalid file was accepted") }
         let result =
-          "PASS: baseline JPEG profile; image 368x368; GIF variable timing; MP4 conversion; invalid file rejected"
+          "PASS: baseline JPEG profile; image 368x368; GIF variable timing; MP4 conversion; four text effects; GIF export dimensions, looping and timing; invalid file rejected"
         try result.write(to: output, atomically: true, encoding: .utf8)
         return result
       } catch {

@@ -174,3 +174,121 @@ enum MediaConverter {
     return PreparedMedia(data: data, ext: "avi", frames: frames, fps: fps, name: name)
   }
 }
+
+struct AnimationDraft {
+  var text = "HELLO!"
+  var background: UIImage?
+  var backgroundColor = UIColor.black
+  var textColor = UIColor.white
+  var effect = TextEffect.grow
+  var duration = 3.0
+  var fontSize = 64.0
+}
+enum TextEffect: String, CaseIterable {
+  case grow = "Grow"
+  case explode = "Explode"
+  case scroll = "Scroll"
+  case rotate = "Rotate"
+}
+enum AnimationMaker {
+  static func image(_ draft: AnimationDraft, phase: Double) -> UIImage {
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    format.opaque = true
+    return UIGraphicsImageRenderer(size: CGSize(width: 368, height: 368), format: format).image {
+      renderer in
+      draft.backgroundColor.setFill()
+      renderer.fill(CGRect(x: 0, y: 0, width: 368, height: 368))
+      if let image = draft.background {
+        let scale = max(368 / image.size.width, 368 / image.size.height)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        image.draw(
+          in: CGRect(
+            x: (368 - size.width) / 2, y: (368 - size.height) / 2, width: size.width,
+            height: size.height))
+      }
+      let font = UIFont.systemFont(ofSize: draft.fontSize, weight: .heavy)
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: font, .foregroundColor: draft.textColor,
+      ]
+      let text = draft.text as NSString
+      let size = text.size(withAttributes: attributes)
+      let ctx = renderer.cgContext
+      ctx.translateBy(x: 184, y: 184)
+      let fit = min(1, 300 / max(1, size.width))
+      switch draft.effect {
+      case .grow:
+        let scale = fit * (0.65 + 0.35 * (1 - cos(phase * .pi * 2)) / 2)
+        ctx.scaleBy(x: scale, y: scale)
+      case .rotate:
+        ctx.rotate(by: phase * .pi * 2)
+        ctx.scaleBy(x: fit, y: fit)
+      case .scroll:
+        ctx.translateBy(x: (184 + size.width / 2) * (1 - 2 * phase), y: 0)
+      case .explode:
+        ctx.scaleBy(x: fit, y: fit)
+        let spread = pow(sin(phase * .pi), 4)
+        var x = -size.width / 2
+        let letters = Array(draft.text)
+        for (index, letter) in letters.enumerated() {
+          let glyph = String(letter) as NSString
+          let width = glyph.size(withAttributes: attributes).width
+          let angle = Double(index) * 2.399963
+          ctx.saveGState()
+          ctx.setAlpha(1 - spread * 0.8)
+          ctx.translateBy(
+            x: x + width / 2 + cos(angle) * spread * 180, y: sin(angle) * spread * 180)
+          ctx.rotate(by: spread * (index.isMultiple(of: 2) ? 1 : -1))
+          glyph.draw(at: CGPoint(x: -width / 2, y: -size.height / 2), withAttributes: attributes)
+          ctx.restoreGState()
+          x += width
+        }
+        return
+      }
+      text.draw(at: CGPoint(x: -size.width / 2, y: -size.height / 2), withAttributes: attributes)
+    }
+  }
+  static func prepare(_ draft: AnimationDraft, quality: Quality) throws -> PreparedMedia {
+    let count = Int(draft.duration * Double(quality.fps))
+    var frames = [Data]()
+    for index in 0..<count {
+      try Task.checkCancellation()
+      frames.append(
+        try autoreleasepool {
+          try MediaConverter.render(
+            image(draft, phase: Double(index) / Double(count)), fit: .fill, quality: quality.jpeg)
+        })
+    }
+    return try MediaConverter.packaged(frames, fps: quality.fps, name: "Text animation")
+  }
+}
+enum GIFExporter {
+  static func export(_ media: PreparedMedia) throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString + ".gif")
+    guard
+      let destination = CGImageDestinationCreateWithURL(
+        url as CFURL, UTType.gif.identifier as CFString, media.frames.count, nil)
+    else { throw BadgeError("Could not create GIF.") }
+    CGImageDestinationSetProperties(
+      destination,
+      [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFLoopCount: 0]] as CFDictionary)
+    do {
+      for frame in media.frames {
+        try Task.checkCancellation()
+        guard let source = CGImageSourceCreateWithData(frame as CFData, nil),
+          let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { throw BadgeError("Could not export a GIF frame.") }
+        CGImageDestinationAddImage(
+          destination, image,
+          [kCGImagePropertyGIFDictionary: [kCGImagePropertyGIFDelayTime: 1.0 / Double(media.fps)]]
+            as CFDictionary)
+      }
+      guard CGImageDestinationFinalize(destination) else { throw BadgeError("Could not save GIF.") }
+      return url
+    } catch {
+      try? FileManager.default.removeItem(at: url)
+      throw error
+    }
+  }
+}
